@@ -7,7 +7,10 @@ export const INITIAL_OPEN_TABS: TabItem[] = [
     url: 'https://firebase.google.com/docs/auth/admin/custom-claims',
     domain: 'firebase.google.com',
     category: 'docs',
+    domainCategory: 'development',
     isActive: true,
+    timeSpentSeconds: 420,
+    lastActivatedAt: new Date().toISOString(),
   },
   {
     id: 'tab-2',
@@ -15,7 +18,9 @@ export const INITIAL_OPEN_TABS: TabItem[] = [
     url: 'https://github.com/civic-reporter/core-app/blob/main/src/auth.ts',
     domain: 'github.com',
     category: 'repo',
+    domainCategory: 'development',
     isActive: false,
+    timeSpentSeconds: 680,
   },
   {
     id: 'tab-3',
@@ -23,7 +28,9 @@ export const INITIAL_OPEN_TABS: TabItem[] = [
     url: 'https://react.dev/reference/react/useEffect',
     domain: 'react.dev',
     category: 'docs',
+    domainCategory: 'development',
     isActive: false,
+    timeSpentSeconds: 190,
   },
   {
     id: 'tab-4',
@@ -31,7 +38,9 @@ export const INITIAL_OPEN_TABS: TabItem[] = [
     url: 'https://stackoverflow.com/questions/63219481/firebase-auth-token-refresh-strategy',
     domain: 'stackoverflow.com',
     category: 'qa',
+    domainCategory: 'development',
     isActive: false,
+    timeSpentSeconds: 95,
   },
 ];
 
@@ -65,6 +74,7 @@ export const RECENT_SESSIONS: WorkSession[] = [
         url: 'https://stripe.com/docs/webhooks',
         domain: 'stripe.com',
         category: 'docs',
+        domainCategory: 'development',
       },
       {
         id: 'tab-ft-2',
@@ -72,6 +82,7 @@ export const RECENT_SESSIONS: WorkSession[] = [
         url: 'https://github.com/fintrack/api/pull/42',
         domain: 'github.com',
         category: 'repo',
+        domainCategory: 'development',
       },
       {
         id: 'tab-ft-3',
@@ -79,6 +90,7 @@ export const RECENT_SESSIONS: WorkSession[] = [
         url: 'https://prisma.io/docs/concepts/components/prisma-schema',
         domain: 'prisma.io',
         category: 'docs',
+        domainCategory: 'development',
       },
     ],
     summary: 'Resolved race condition in customer subscription renewal events and idempotency keys.',
@@ -101,6 +113,7 @@ export const RECENT_SESSIONS: WorkSession[] = [
         url: 'https://socket.io/docs/v4/connection-state-recovery',
         domain: 'socket.io',
         category: 'docs',
+        domainCategory: 'development',
       },
       {
         id: 'tab-mv-2',
@@ -108,6 +121,7 @@ export const RECENT_SESSIONS: WorkSession[] = [
         url: 'https://rxjs.dev/api/operators/throttleTime',
         domain: 'rxjs.dev',
         category: 'docs',
+        domainCategory: 'development',
       },
     ],
     summary: 'Optimized high-frequency Bluetooth telemetry ingestion with backpressure throttling.',
@@ -127,4 +141,15 @@ export const INITIAL_CONTEXT_STATE: ContextState = {
   privacyMode: 'local_only',
   openTabs: INITIAL_OPEN_TABS,
   recentSessions: RECENT_SESSIONS,
+  contextSwitchEvents: [],
+  tabGroups: [
+    {
+      groupName: 'Development',
+      tabs: INITIAL_OPEN_TABS,
+      primaryCategory: 'development',
+      confidence: 92,
+    },
+  ],
+  sessionStartTime: new Date(Date.now() - 48 * 60 * 1000).toISOString(),
+  lastActivityTime: new Date().toISOString(),
 };

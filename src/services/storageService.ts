@@ -3,7 +3,53 @@ import { INITIAL_CONTEXT_STATE } from './mockData';
 
 const STORAGE_KEY = 'contextswitch_state_v1';
 
+/**
+ * Check if we're running inside a Chrome extension environment.
+ */
+function isExtensionEnv(): boolean {
+  return (
+    typeof chrome !== 'undefined' &&
+    !!chrome.runtime &&
+    !!chrome.runtime.sendMessage
+  );
+}
+
 export const storageService = {
+  /**
+   * Load live context state from the background service worker.
+   * Falls back to stored state or mock data when not in extension env.
+   */
+  async loadLiveContext(): Promise<ContextState> {
+    if (isExtensionEnv()) {
+      try {
+        const response = await chrome.runtime.sendMessage({ type: 'CS_GET_LIVE_STATE' });
+        if (response && response.openTabs) {
+          // Map the live state to our ContextState shape
+          return {
+            activeProject: response.activeProject || 'Detecting...',
+            currentTask: response.currentTask || 'Analyzing browser activity...',
+            contextScore: response.contextScore ?? 0,
+            focusState: response.focusState || 'Moderate Focus',
+            switchesToday: response.switchesToday ?? 0,
+            deepWorkMinutes: response.deepWorkMinutes ?? 0,
+            privacyMode: 'local_only',
+            openTabs: response.openTabs || [],
+            recentSessions: response.recentSessions || INITIAL_CONTEXT_STATE.recentSessions,
+            contextSwitchEvents: response.contextSwitchEvents || [],
+            tabGroups: response.tabGroups || [],
+            sessionStartTime: response.sessionStartTime || new Date().toISOString(),
+            lastActivityTime: response.lastActivityTime || new Date().toISOString(),
+          };
+        }
+      } catch (e) {
+        console.warn('[ContextSwitch] Failed to get live state from service worker:', e);
+      }
+    }
+
+    // Fallback: try loading from storage, then mock
+    return this.loadState();
+  },
+
   /**
    * Load context state from Chrome storage or fallback to localStorage
    */
@@ -40,6 +86,41 @@ export const storageService = {
       }
     } catch (e) {
       console.warn('[ContextSwitch] Error saving storage:', e);
+    }
+  },
+
+  /**
+   * Clear all ContextSwitch data from storage.
+   */
+  async clearAllData(): Promise<void> {
+    if (isExtensionEnv()) {
+      try {
+        await chrome.runtime.sendMessage({ type: 'CS_CLEAR_CONTEXT_DATA' });
+      } catch (e) {
+        console.warn('[ContextSwitch] Clear via message failed:', e);
+      }
+    }
+
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        const all = await chrome.storage.local.get(null);
+        const csKeys = Object.keys(all).filter(k => k.startsWith('cs_') || k.startsWith('contextswitch_'));
+        if (csKeys.length > 0) {
+          await chrome.storage.local.remove(csKeys);
+        }
+      }
+      if (typeof window !== 'undefined' && window.localStorage) {
+        const keysToRemove: string[] = [];
+        for (let i = 0; i < window.localStorage.length; i++) {
+          const key = window.localStorage.key(i);
+          if (key && (key.startsWith('cs_') || key.startsWith('contextswitch_'))) {
+            keysToRemove.push(key);
+          }
+        }
+        keysToRemove.forEach(k => window.localStorage.removeItem(k));
+      }
+    } catch (e) {
+      console.warn('[ContextSwitch] Error clearing storage:', e);
     }
   },
 

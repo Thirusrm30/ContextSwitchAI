@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Header } from '../components/Header';
 import { CurrentContextCard } from '../components/CurrentContextCard';
 import { ContextScoreGauge } from '../components/ContextScoreGauge';
@@ -7,10 +7,14 @@ import { RecentSessions } from '../components/RecentSessions';
 import { PrivacyStatusBadge } from '../components/PrivacyStatusBadge';
 import { QuickActions } from '../components/QuickActions';
 import { ResumeWorkModal } from '../components/ResumeWorkModal';
+import { ContextSwitchTimeline } from '../components/ContextSwitchTimeline';
+import { TabGroupsView } from '../components/TabGroupsView';
 import { storageService } from '../services/storageService';
 import { ContextState, WorkSession } from '../types/context';
 import { INITIAL_CONTEXT_STATE } from '../services/mockData';
-import { CheckCircle2, Info } from 'lucide-react';
+import { CheckCircle2, Wifi, WifiOff } from 'lucide-react';
+
+const POLL_INTERVAL_MS = 3000;
 
 export const SidePanelDashboard: React.FC = () => {
   const [state, setState] = useState<ContextState>(INITIAL_CONTEXT_STATE);
@@ -18,22 +22,41 @@ export const SidePanelDashboard: React.FC = () => {
   const [selectedSessionForResume, setSelectedSessionForResume] = useState<WorkSession | null>(null);
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [isLive, setIsLive] = useState(false);
+  const [isClearing, setIsClearing] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  useEffect(() => {
-    loadContext();
+  const loadContext = useCallback(async (showRefreshIndicator = false) => {
+    if (showRefreshIndicator) setIsRefreshing(true);
+    try {
+      const data = await storageService.loadLiveContext();
+      setState(data);
+
+      // Detect if we're getting live data (has real tabs with numeric IDs)
+      const hasLiveTabs = data.openTabs.some(t => typeof t.id === 'number');
+      setIsLive(hasLiveTabs);
+    } catch (e) {
+      console.error('Failed to load context', e);
+      setIsLive(false);
+    } finally {
+      if (showRefreshIndicator) {
+        setTimeout(() => setIsRefreshing(false), 400);
+      }
+    }
   }, []);
 
-  const loadContext = async () => {
-    setIsRefreshing(true);
-    try {
-      const data = await storageService.loadState();
-      setState(data);
-    } catch (e) {
-      console.error('Failed to load state', e);
-    } finally {
-      setTimeout(() => setIsRefreshing(false), 400);
-    }
-  };
+  // Initial load + polling
+  useEffect(() => {
+    loadContext(true);
+
+    pollRef.current = setInterval(() => {
+      loadContext(false);
+    }, POLL_INTERVAL_MS);
+
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [loadContext]);
 
   const showToast = (msg: string) => {
     setToastMessage(msg);
@@ -43,10 +66,11 @@ export const SidePanelDashboard: React.FC = () => {
   };
 
   const handleResumePrimary = () => {
-    // Pick the most recent non-active session, or default to current
     const targetSession = state.recentSessions.find((s) => !s.isCurrent) || state.recentSessions[0];
-    setSelectedSessionForResume(targetSession);
-    setIsResumeModalOpen(true);
+    if (targetSession) {
+      setSelectedSessionForResume(targetSession);
+      setIsResumeModalOpen(true);
+    }
   };
 
   const handleResumeSpecificSession = (session: WorkSession) => {
@@ -55,7 +79,6 @@ export const SidePanelDashboard: React.FC = () => {
   };
 
   const handleConfirmRestore = async (session: WorkSession) => {
-    // Update active project and task to selected session
     const updatedSessions = state.recentSessions.map((s) => ({
       ...s,
       isCurrent: s.id === session.id,
@@ -74,7 +97,6 @@ export const SidePanelDashboard: React.FC = () => {
     await storageService.saveState(newState);
     setIsResumeModalOpen(false);
 
-    // If running in Chrome Extension environment, open tabs
     if (typeof chrome !== 'undefined' && chrome.tabs) {
       session.openTabs.forEach((tab) => {
         chrome.tabs.create({ url: tab.url, active: false });
@@ -88,10 +110,30 @@ export const SidePanelDashboard: React.FC = () => {
     showToast(`Context snapshot saved: ${state.activeProject}`);
   };
 
+  const handleClearData = async () => {
+    setIsClearing(true);
+    try {
+      await storageService.clearAllData();
+      showToast('All context data cleared successfully');
+      await loadContext(true);
+    } catch (e) {
+      console.error('Failed to clear data', e);
+      showToast('Failed to clear context data');
+    } finally {
+      setIsClearing(false);
+    }
+  };
+
+  // Compute derived values
+  const activeTab = state.openTabs.find(t => t.isActive) || null;
+  const sessionDurationMinutes = state.sessionStartTime
+    ? Math.floor((Date.now() - new Date(state.sessionStartTime).getTime()) / 60000)
+    : 0;
+
   return (
     <div className="flex flex-col min-h-screen bg-background text-slate-100 font-sans">
       {/* 1. Header with Logo & Brand */}
-      <Header onRefresh={loadContext} isRefreshing={isRefreshing} />
+      <Header onRefresh={() => loadContext(true)} isRefreshing={isRefreshing} />
 
       {/* Toast Notification */}
       {toastMessage && (
@@ -102,47 +144,76 @@ export const SidePanelDashboard: React.FC = () => {
       )}
 
       <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full pb-8">
-        {/* Quick Context Switch Alert Banner */}
-        <div className="flex items-center gap-2 p-2.5 rounded-lg bg-brand-500/10 border border-brand-500/20 text-brand-300 text-xs">
-          <Info className="w-4 h-4 text-brand-400 shrink-0" />
-          <span>
-            Working on <strong>{state.activeProject}</strong>. ContextSwitch is actively tracking your focus state.
-          </span>
+        {/* Live / Fallback Status Banner */}
+        <div className={`flex items-center gap-2 p-2.5 rounded-lg text-xs ${
+          isLive
+            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+            : 'bg-brand-500/10 border border-brand-500/20 text-brand-300'
+        }`}>
+          {isLive ? (
+            <>
+              <Wifi className="w-4 h-4 text-emerald-400 shrink-0" />
+              <span>
+                <strong>Live Tracking Active</strong> — Monitoring {state.openTabs.length} tabs across {state.tabGroups?.length || 0} groups.
+              </span>
+            </>
+          ) : (
+            <>
+              <WifiOff className="w-4 h-4 text-brand-400 shrink-0" />
+              <span>
+                <strong>Preview Mode</strong> — Load as extension for live browser tracking. Showing mock data.
+              </span>
+            </>
+          )}
         </div>
 
-        {/* 7. Resume My Work Primary Hero CTA */}
+        {/* Resume My Work Primary Hero CTA */}
         <QuickActions
           onResumeClick={handleResumePrimary}
           onSaveSnapshot={handleSaveSnapshot}
           isCurrentActive={true}
         />
 
-        {/* 2, 3, 4, 8. Current Context, Active Project, Current Task & Switching Indicator */}
+        {/* Current Context, Active Project, Current Task & Switching Indicator */}
         <CurrentContextCard
           activeProject={state.activeProject}
           currentTask={state.currentTask}
-          durationMinutes={48}
+          durationMinutes={sessionDurationMinutes}
           switchesToday={state.switchesToday}
+          activeTab={activeTab}
         />
 
-        {/* 8. Context Score Gauge (87%) */}
+        {/* Context Score Gauge */}
         <ContextScoreGauge
           score={state.contextScore}
           focusState={state.focusState}
           switchesCount={state.switchesToday}
         />
 
-        {/* 5. Open Project Tabs (Firebase Docs, GitHub Repo, React Docs, Stack Overflow) */}
+        {/* Auto-Detected Tab Groups */}
+        {state.tabGroups && state.tabGroups.length > 0 && (
+          <TabGroupsView groups={state.tabGroups} />
+        )}
+
+        {/* Open Project Tabs */}
         <OpenTabsList tabs={state.openTabs} />
 
-        {/* 6. Recent Sessions */}
-        <RecentSessions
-          sessions={state.recentSessions}
-          onResumeSession={handleResumeSpecificSession}
-        />
+        {/* Context Switch Timeline */}
+        <ContextSwitchTimeline events={state.contextSwitchEvents || []} />
 
-        {/* 9. Privacy Status */}
-        <PrivacyStatusBadge />
+        {/* Recent Sessions */}
+        {state.recentSessions.length > 0 && (
+          <RecentSessions
+            sessions={state.recentSessions}
+            onResumeSession={handleResumeSpecificSession}
+          />
+        )}
+
+        {/* Privacy Status with Clear Data */}
+        <PrivacyStatusBadge
+          onClearData={handleClearData}
+          isClearing={isClearing}
+        />
       </main>
 
       {/* Restore Work Modal */}

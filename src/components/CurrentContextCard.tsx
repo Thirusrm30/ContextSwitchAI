@@ -1,11 +1,14 @@
 import React from 'react';
-import { FolderKanban, CheckSquare, Clock, ArrowRightLeft, Sparkles } from 'lucide-react';
+import { FolderKanban, CheckSquare, Clock, ArrowRightLeft, Sparkles, Globe, Timer } from 'lucide-react';
+import { TabItem, DomainCategory } from '../types/context';
+import { getCategoryDisplay } from '../services/contextEngine';
 
 interface CurrentContextCardProps {
   activeProject: string;
   currentTask: string;
   durationMinutes: number;
   switchesToday: number;
+  activeTab?: TabItem | null;
 }
 
 export const CurrentContextCard: React.FC<CurrentContextCardProps> = ({
@@ -13,7 +16,14 @@ export const CurrentContextCard: React.FC<CurrentContextCardProps> = ({
   currentTask,
   durationMinutes,
   switchesToday,
+  activeTab,
 }) => {
+  const activeCategory = activeTab?.domainCategory || 'general';
+  const catDisplay = getCategoryDisplay(activeCategory as DomainCategory);
+  const timeOnTab = activeTab?.timeSpentSeconds
+    ? `${Math.floor(activeTab.timeSpentSeconds / 60)}m ${activeTab.timeSpentSeconds % 60}s`
+    : null;
+
   return (
     <div className="rounded-xl bg-gradient-to-br from-surface-secondary to-surface border border-surface-border p-4 shadow-sm relative overflow-hidden">
       <div className="flex items-center justify-between mb-3">
@@ -41,15 +51,34 @@ export const CurrentContextCard: React.FC<CurrentContextCardProps> = ({
         </h2>
       </div>
 
-      {/* Current Task */}
+      {/* Current Task / Active Tab */}
       <div className="p-2.5 rounded-lg bg-surface-tertiary/60 border border-surface-border/80">
         <div className="flex items-center gap-1.5 text-[11px] text-slate-400 mb-1">
           <CheckSquare className="w-3.5 h-3.5 text-accent-cyan" />
-          <span className="font-medium">Current Task Focus</span>
+          <span className="font-medium">Current Focus</span>
         </div>
-        <p className="text-sm font-semibold text-slate-100 pl-5">
+        <p className="text-sm font-semibold text-slate-100 pl-5 truncate">
           {currentTask}
         </p>
+
+        {/* Active Tab Details (real data) */}
+        {activeTab && (
+          <div className="mt-2 pt-2 border-t border-surface-border/40 pl-5 flex flex-wrap items-center gap-2">
+            <span className="flex items-center gap-1 text-[10px] text-slate-400">
+              <Globe className="w-3 h-3" />
+              {activeTab.domain}
+            </span>
+            <span className={`text-[9px] px-1.5 py-0.5 rounded border font-semibold tracking-wider ${catDisplay.colorClass}`}>
+              {catDisplay.label.toUpperCase()}
+            </span>
+            {timeOnTab && (
+              <span className="flex items-center gap-1 text-[10px] text-slate-400 font-mono">
+                <Timer className="w-3 h-3" />
+                {timeOnTab}
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Context Switching Indicator */}
