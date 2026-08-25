@@ -9,8 +9,12 @@ import { QuickActions } from '../components/QuickActions';
 import { ResumeWorkModal } from '../components/ResumeWorkModal';
 import { ContextSwitchTimeline } from '../components/ContextSwitchTimeline';
 import { TabGroupsView } from '../components/TabGroupsView';
+import { AIContextCard } from '../components/AIContextCard';
+import { DistractionAlert } from '../components/DistractionAlert';
+import { AISettingsPanel } from '../components/AISettingsPanel';
 import { storageService } from '../services/storageService';
-import { ContextState, WorkSession } from '../types/context';
+import { aiService } from '../services/ai/aiService';
+import { ContextState, WorkSession, AIContextResult, AISettings } from '../types/context';
 import { INITIAL_CONTEXT_STATE } from '../services/mockData';
 import { CheckCircle2, Wifi, WifiOff } from 'lucide-react';
 
@@ -24,7 +28,51 @@ export const SidePanelDashboard: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
+  
+  // AI State
+  const [aiResult, setAiResult] = useState<AIContextResult | null>(null);
+  const [isAiLoading, setIsAiLoading] = useState(false);
+  const [showDistractionAlert, setShowDistractionAlert] = useState(false);
+  const [isBreakMode, setIsBreakMode] = useState(false);
+
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const runAiAnalysis = useCallback(async (
+    currentState: ContextState,
+    force = false
+  ) => {
+    if (!currentState.openTabs || currentState.openTabs.length === 0) return;
+
+    if (force) {
+      aiService.invalidateCache();
+    }
+
+    setIsAiLoading(true);
+    try {
+      const sessionDurationMins = currentState.sessionStartTime
+        ? Math.floor((Date.now() - new Date(currentState.sessionStartTime).getTime()) / 60000)
+        : 0;
+
+      const result = await aiService.analyzeCurrentContext(
+        currentState.openTabs,
+        currentState.contextSwitchEvents || [],
+        sessionDurationMins
+      );
+
+      setAiResult(result);
+
+      // Check for distraction alert trigger (if not in break mode)
+      if (result.distraction && !isBreakMode) {
+        setShowDistractionAlert(true);
+      } else if (!result.distraction) {
+        setShowDistractionAlert(false);
+      }
+    } catch (e) {
+      console.warn('[ContextSwitch] AI analysis failed in dashboard:', e);
+    } finally {
+      setIsAiLoading(false);
+    }
+  }, [isBreakMode]);
 
   const loadContext = useCallback(async (showRefreshIndicator = false) => {
     if (showRefreshIndicator) setIsRefreshing(true);
@@ -32,9 +80,17 @@ export const SidePanelDashboard: React.FC = () => {
       const data = await storageService.loadLiveContext();
       setState(data);
 
+      // Sync AI settings with aiService
+      if (data.aiSettings) {
+        aiService.updateSettings(data.aiSettings);
+      }
+
       // Detect if we're getting live data (has real tabs with numeric IDs)
       const hasLiveTabs = data.openTabs.some(t => typeof t.id === 'number');
       setIsLive(hasLiveTabs);
+
+      // Run AI analysis
+      runAiAnalysis(data);
     } catch (e) {
       console.error('Failed to load context', e);
       setIsLive(false);
@@ -43,7 +99,7 @@ export const SidePanelDashboard: React.FC = () => {
         setTimeout(() => setIsRefreshing(false), 400);
       }
     }
-  }, []);
+  }, [runAiAnalysis]);
 
   // Initial load + polling
   useEffect(() => {
@@ -114,6 +170,8 @@ export const SidePanelDashboard: React.FC = () => {
     setIsClearing(true);
     try {
       await storageService.clearAllData();
+      setAiResult(null);
+      setShowDistractionAlert(false);
       showToast('All context data cleared successfully');
       await loadContext(true);
     } catch (e) {
@@ -124,11 +182,39 @@ export const SidePanelDashboard: React.FC = () => {
     }
   };
 
+  const handleSaveAISettings = async (newSettings: AISettings) => {
+    await storageService.saveAISettings(newSettings);
+    aiService.updateSettings(newSettings);
+    setState(prev => ({ ...prev, aiSettings: newSettings }));
+    showToast(`AI mode set to: ${newSettings.processingMode === 'cloud_ai' ? 'Cloud AI' : 'Local Only'}`);
+    runAiAnalysis(state, true);
+  };
+
+  const handleContinueWorking = () => {
+    setShowDistractionAlert(false);
+    showToast('Focus reaffirmed. Keep going!');
+  };
+
+  const handleTakeBreak = () => {
+    setShowDistractionAlert(false);
+    setIsBreakMode(true);
+    showToast('Break mode enabled. Take your time!');
+  };
+
   // Compute derived values
   const activeTab = state.openTabs.find(t => t.isActive) || null;
   const sessionDurationMinutes = state.sessionStartTime
     ? Math.floor((Date.now() - new Date(state.sessionStartTime).getTime()) / 60000)
     : 0;
+
+  // Use AI project & task if available, otherwise fall back to heuristic
+  const displayProject = aiResult?.project && aiResult.project !== 'Unknown'
+    ? aiResult.project
+    : state.activeProject;
+
+  const displayTask = aiResult?.task && aiResult.task !== 'Analysis failed'
+    ? aiResult.task
+    : state.currentTask;
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-slate-100 font-sans">
@@ -167,6 +253,24 @@ export const SidePanelDashboard: React.FC = () => {
           )}
         </div>
 
+        {/* Non-blocking Distraction Alert */}
+        <DistractionAlert
+          isOpen={showDistractionAlert}
+          reason={aiResult?.distractionReason}
+          currentTask={displayTask}
+          onContinueWorking={handleContinueWorking}
+          onTakeBreak={handleTakeBreak}
+          onDismiss={() => setShowDistractionAlert(false)}
+        />
+
+        {/* 🧠 Layer 3 AI Context Card */}
+        <AIContextCard
+          aiResult={aiResult}
+          isLoading={isAiLoading}
+          providerName={aiService.getProviderName()}
+          onReanalyze={() => runAiAnalysis(state, true)}
+        />
+
         {/* Resume My Work Primary Hero CTA */}
         <QuickActions
           onResumeClick={handleResumePrimary}
@@ -176,8 +280,8 @@ export const SidePanelDashboard: React.FC = () => {
 
         {/* Current Context, Active Project, Current Task & Switching Indicator */}
         <CurrentContextCard
-          activeProject={state.activeProject}
-          currentTask={state.currentTask}
+          activeProject={displayProject}
+          currentTask={displayTask}
           durationMinutes={sessionDurationMinutes}
           switchesToday={state.switchesToday}
           activeTab={activeTab}
@@ -208,6 +312,12 @@ export const SidePanelDashboard: React.FC = () => {
             onResumeSession={handleResumeSpecificSession}
           />
         )}
+
+        {/* AI Processing Settings */}
+        <AISettingsPanel
+          settings={state.aiSettings || aiService.getSettings()}
+          onSaveSettings={handleSaveAISettings}
+        />
 
         {/* Privacy Status with Clear Data */}
         <PrivacyStatusBadge

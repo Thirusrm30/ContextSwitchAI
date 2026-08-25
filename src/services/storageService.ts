@@ -1,7 +1,9 @@
-import { ContextState } from '../types/context';
+import { ContextState, AISettings } from '../types/context';
 import { INITIAL_CONTEXT_STATE } from './mockData';
+import { DEFAULT_AI_SETTINGS } from './ai/aiService';
 
 const STORAGE_KEY = 'contextswitch_state_v1';
+const AI_SETTINGS_KEY = 'cs_ai_settings_v1';
 
 /**
  * Check if we're running inside a Chrome extension environment.
@@ -20,6 +22,8 @@ export const storageService = {
    * Falls back to stored state or mock data when not in extension env.
    */
   async loadLiveContext(): Promise<ContextState> {
+    const aiSettings = await this.loadAISettings();
+
     if (isExtensionEnv()) {
       try {
         const response = await chrome.runtime.sendMessage({ type: 'CS_GET_LIVE_STATE' });
@@ -39,6 +43,7 @@ export const storageService = {
             tabGroups: response.tabGroups || [],
             sessionStartTime: response.sessionStartTime || new Date().toISOString(),
             lastActivityTime: response.lastActivityTime || new Date().toISOString(),
+            aiSettings,
           };
         }
       } catch (e) {
@@ -47,7 +52,11 @@ export const storageService = {
     }
 
     // Fallback: try loading from storage, then mock
-    return this.loadState();
+    const fallbackState = await this.loadState();
+    return {
+      ...fallbackState,
+      aiSettings,
+    };
   },
 
   /**
@@ -86,6 +95,43 @@ export const storageService = {
       }
     } catch (e) {
       console.warn('[ContextSwitch] Error saving storage:', e);
+    }
+  },
+
+  /**
+   * Load AI settings from Chrome storage or localStorage
+   */
+  async loadAISettings(): Promise<AISettings> {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        const result = await chrome.storage.local.get(AI_SETTINGS_KEY);
+        if (result[AI_SETTINGS_KEY]) {
+          return result[AI_SETTINGS_KEY] as AISettings;
+        }
+      } else if (typeof window !== 'undefined' && window.localStorage) {
+        const stored = window.localStorage.getItem(AI_SETTINGS_KEY);
+        if (stored) {
+          return JSON.parse(stored) as AISettings;
+        }
+      }
+    } catch (e) {
+      console.warn('[ContextSwitch] Error loading AI settings:', e);
+    }
+    return DEFAULT_AI_SETTINGS;
+  },
+
+  /**
+   * Save AI settings to Chrome storage or localStorage
+   */
+  async saveAISettings(settings: AISettings): Promise<void> {
+    try {
+      if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
+        await chrome.storage.local.set({ [AI_SETTINGS_KEY]: settings });
+      } else if (typeof window !== 'undefined' && window.localStorage) {
+        window.localStorage.setItem(AI_SETTINGS_KEY, JSON.stringify(settings));
+      }
+    } catch (e) {
+      console.warn('[ContextSwitch] Error saving AI settings:', e);
     }
   },
 
