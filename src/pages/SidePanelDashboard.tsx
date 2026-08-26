@@ -4,7 +4,7 @@ import { CurrentContextCard } from '../components/CurrentContextCard';
 import { ContextScoreGauge } from '../components/ContextScoreGauge';
 import { OpenTabsList } from '../components/OpenTabsList';
 import { RecentSessions } from '../components/RecentSessions';
-import { PrivacyStatusBadge } from '../components/PrivacyStatusBadge';
+import { PrivacySettingsPanel } from '../components/PrivacySettings';
 import { QuickActions } from '../components/QuickActions';
 import { ResumeWorkModal } from '../components/ResumeWorkModal';
 import { ContextSwitchTimeline } from '../components/ContextSwitchTimeline';
@@ -12,11 +12,23 @@ import { TabGroupsView } from '../components/TabGroupsView';
 import { AIContextCard } from '../components/AIContextCard';
 import { DistractionAlert } from '../components/DistractionAlert';
 import { AISettingsPanel } from '../components/AISettingsPanel';
+import { ContextHistory } from '../components/ContextHistory';
+import { SessionTimeline } from '../components/SessionTimeline';
 import { storageService } from '../services/storageService';
 import { aiService } from '../services/ai/aiService';
-import { ContextState, WorkSession, AIContextResult, AISettings } from '../types/context';
-import { INITIAL_CONTEXT_STATE } from '../services/mockData';
-import { CheckCircle2, Wifi, WifiOff } from 'lucide-react';
+import {
+  ContextState,
+  WorkSession,
+  AIContextResult,
+  AISettings,
+  ProjectHistory,
+  PrivacySettings as PrivacySettingsType,
+} from '../types/context';
+import {
+  INITIAL_CONTEXT_STATE,
+  DEFAULT_PRIVACY_SETTINGS,
+} from '../services/mockData';
+import { CheckCircle2, Wifi, WifiOff, Eye } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -28,7 +40,9 @@ export const SidePanelDashboard: React.FC = () => {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
-  
+  const [summaryModalSession, setSummaryModalSession] = useState<WorkSession | null>(null);
+  const [showSummaryModal, setShowSummaryModal] = useState(false);
+
   // AI State
   const [aiResult, setAiResult] = useState<AIContextResult | null>(null);
   const [isAiLoading, setIsAiLoading] = useState(false);
@@ -61,7 +75,6 @@ export const SidePanelDashboard: React.FC = () => {
 
       setAiResult(result);
 
-      // Check for distraction alert trigger (if not in break mode)
       if (result.distraction && !isBreakMode) {
         setShowDistractionAlert(true);
       } else if (!result.distraction) {
@@ -80,16 +93,13 @@ export const SidePanelDashboard: React.FC = () => {
       const data = await storageService.loadLiveContext();
       setState(data);
 
-      // Sync AI settings with aiService
       if (data.aiSettings) {
         aiService.updateSettings(data.aiSettings);
       }
 
-      // Detect if we're getting live data (has real tabs with numeric IDs)
       const hasLiveTabs = data.openTabs.some(t => typeof t.id === 'number');
       setIsLive(hasLiveTabs);
 
-      // Run AI analysis
       runAiAnalysis(data);
     } catch (e) {
       console.error('Failed to load context', e);
@@ -101,7 +111,6 @@ export const SidePanelDashboard: React.FC = () => {
     }
   }, [runAiAnalysis]);
 
-  // Initial load + polling
   useEffect(() => {
     loadContext(true);
 
@@ -132,6 +141,15 @@ export const SidePanelDashboard: React.FC = () => {
   const handleResumeSpecificSession = (session: WorkSession) => {
     setSelectedSessionForResume(session);
     setIsResumeModalOpen(true);
+  };
+
+  const handleResumeProject = (project: ProjectHistory) => {
+    if (project.sessions.length > 0) {
+      setSelectedSessionForResume(project.sessions[0]);
+      setIsResumeModalOpen(true);
+    } else {
+      showToast(`Resume not available for "${project.projectName}" — no saved sessions.`);
+    }
   };
 
   const handleConfirmRestore = async (session: WorkSession) => {
@@ -182,6 +200,34 @@ export const SidePanelDashboard: React.FC = () => {
     }
   };
 
+  const handleDeleteSession = async (session: WorkSession) => {
+    const updatedSessions = state.recentSessions.filter((s) => s.id !== session.id);
+    const newState: ContextState = { ...state, recentSessions: updatedSessions };
+    setState(newState);
+    await storageService.saveState(newState);
+    showToast(`Deleted session: "${session.projectName}"`);
+  };
+
+  const handleViewSummary = (session: WorkSession) => {
+    setSummaryModalSession(session);
+    setShowSummaryModal(true);
+  };
+
+  const handleDeleteProject = async (projectId: string) => {
+    const updatedProjects = (state.projectHistory || []).filter((p) => p.id !== projectId);
+    const newState: ContextState = { ...state, projectHistory: updatedProjects };
+    setState(newState);
+    await storageService.saveState(newState);
+    showToast('Project removed from history');
+  };
+
+  const handleSavePrivacySettings = async (newSettings: PrivacySettingsType) => {
+    const newState: ContextState = { ...state, privacySettings: newSettings };
+    setState(newState);
+    await storageService.saveState(newState);
+    showToast('Privacy settings updated');
+  };
+
   const handleSaveAISettings = async (newSettings: AISettings) => {
     await storageService.saveAISettings(newSettings);
     aiService.updateSettings(newSettings);
@@ -201,13 +247,11 @@ export const SidePanelDashboard: React.FC = () => {
     showToast('Break mode enabled. Take your time!');
   };
 
-  // Compute derived values
   const activeTab = state.openTabs.find(t => t.isActive) || null;
   const sessionDurationMinutes = state.sessionStartTime
     ? Math.floor((Date.now() - new Date(state.sessionStartTime).getTime()) / 60000)
     : 0;
 
-  // Use AI project & task if available, otherwise fall back to heuristic
   const displayProject = aiResult?.project && aiResult.project !== 'Unknown'
     ? aiResult.project
     : state.activeProject;
@@ -218,7 +262,6 @@ export const SidePanelDashboard: React.FC = () => {
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-slate-100 font-sans">
-      {/* 1. Header with Logo & Brand */}
       <Header onRefresh={() => loadContext(true)} isRefreshing={isRefreshing} />
 
       {/* Toast Notification */}
@@ -263,7 +306,7 @@ export const SidePanelDashboard: React.FC = () => {
           onDismiss={() => setShowDistractionAlert(false)}
         />
 
-        {/* 🧠 Layer 3 AI Context Card */}
+        {/* AI Context Card */}
         <AIContextCard
           aiResult={aiResult}
           isLoading={isAiLoading}
@@ -271,14 +314,14 @@ export const SidePanelDashboard: React.FC = () => {
           onReanalyze={() => runAiAnalysis(state, true)}
         />
 
-        {/* Resume My Work Primary Hero CTA */}
+        {/* Resume My Work Hero CTA */}
         <QuickActions
           onResumeClick={handleResumePrimary}
           onSaveSnapshot={handleSaveSnapshot}
           isCurrentActive={true}
         />
 
-        {/* Current Context, Active Project, Current Task & Switching Indicator */}
+        {/* Current Context */}
         <CurrentContextCard
           activeProject={displayProject}
           currentTask={displayTask}
@@ -294,12 +337,12 @@ export const SidePanelDashboard: React.FC = () => {
           switchesCount={state.switchesToday}
         />
 
-        {/* Auto-Detected Tab Groups */}
+        {/* Tab Groups */}
         {state.tabGroups && state.tabGroups.length > 0 && (
           <TabGroupsView groups={state.tabGroups} />
         )}
 
-        {/* Open Project Tabs */}
+        {/* Open Tabs */}
         <OpenTabsList tabs={state.openTabs} />
 
         {/* Context Switch Timeline */}
@@ -310,6 +353,17 @@ export const SidePanelDashboard: React.FC = () => {
           <RecentSessions
             sessions={state.recentSessions}
             onResumeSession={handleResumeSpecificSession}
+            onDeleteSession={handleDeleteSession}
+            onViewSummary={handleViewSummary}
+          />
+        )}
+
+        {/* Context History (Recent Work by Project) */}
+        {state.projectHistory && state.projectHistory.length > 0 && (
+          <ContextHistory
+            projects={state.projectHistory}
+            onResumeProject={handleResumeProject}
+            onDeleteProject={handleDeleteProject}
           />
         )}
 
@@ -319,20 +373,132 @@ export const SidePanelDashboard: React.FC = () => {
           onSaveSettings={handleSaveAISettings}
         />
 
-        {/* Privacy Status with Clear Data */}
-        <PrivacyStatusBadge
-          onClearData={handleClearData}
+        {/* Privacy Settings */}
+        <PrivacySettingsPanel
+          settings={state.privacySettings || DEFAULT_PRIVACY_SETTINGS}
+          onSave={handleSavePrivacySettings}
+          onClearAllSessions={handleClearData}
           isClearing={isClearing}
         />
       </main>
 
-      {/* Restore Work Modal */}
+      {/* Resume Work Modal */}
       <ResumeWorkModal
         session={selectedSessionForResume}
         isOpen={isResumeModalOpen}
         onClose={() => setIsResumeModalOpen(false)}
         onConfirmRestore={handleConfirmRestore}
+        onViewSummary={handleViewSummary}
+        onDeleteSession={(session) => {
+          handleDeleteSession(session);
+          setIsResumeModalOpen(false);
+        }}
       />
+
+      {/* Session Summary Modal */}
+      {showSummaryModal && summaryModalSession && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-fadeIn">
+          <div className="w-full max-w-md rounded-2xl bg-surface border border-surface-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
+            {/* Header */}
+            <div className="px-5 pt-5 pb-3 border-b border-surface-border">
+              <div className="flex items-start justify-between">
+                <div>
+                  <h3 className="text-sm font-bold text-white tracking-tight">
+                    Session Summary
+                  </h3>
+                  <p className="text-[11px] text-slate-400 mt-0.5">
+                    {summaryModalSession.projectName} — {summaryModalSession.currentTask}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowSummaryModal(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-md hover:bg-surface-secondary transition-colors"
+                >
+                  <span className="text-lg leading-none">&times;</span>
+                </button>
+              </div>
+            </div>
+
+            {/* Scrollable Content */}
+            <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 custom-scrollbar">
+              {/* AI Summary */}
+              <div className="p-3 rounded-xl bg-surface-secondary/70 border border-surface-border">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-brand-400 block mb-1">
+                  AI Summary
+                </span>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  {summaryModalSession.summary}
+                </p>
+              </div>
+
+              {/* Suggested Next Step */}
+              {summaryModalSession.suggestedNextStep && (
+                <div className="p-3 rounded-xl bg-gradient-to-r from-brand-500/15 to-accent-violet/10 border border-brand-500/30">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-brand-300 block mb-1">
+                    Suggested Next Step
+                  </span>
+                  <p className="text-[11px] text-slate-200 font-medium leading-relaxed">
+                    {summaryModalSession.suggestedNextStep}
+                  </p>
+                </div>
+              )}
+
+              {/* Unfinished Work */}
+              {summaryModalSession.unfinishedWork && (
+                <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
+                    Unfinished Work
+                  </span>
+                  <p className="text-[11px] text-amber-200/80 leading-relaxed">
+                    {summaryModalSession.unfinishedWork}
+                  </p>
+                </div>
+              )}
+
+              {/* Session Timeline */}
+              {summaryModalSession.timeline && summaryModalSession.timeline.length > 0 && (
+                <div className="space-y-2">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
+                    <Eye className="w-3 h-3" />
+                    Session Timeline
+                  </span>
+                  <div className="p-3 rounded-xl bg-surface-secondary/40 border border-surface-border/50">
+                    <SessionTimeline events={summaryModalSession.timeline} />
+                  </div>
+                </div>
+              )}
+
+              {/* Tabs List */}
+              <div className="space-y-1.5">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  Tabs in Session ({summaryModalSession.openTabs.length})
+                </span>
+                <div className="max-h-36 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                  {summaryModalSession.openTabs.map((t) => (
+                    <div
+                      key={t.id}
+                      className="flex items-center justify-between p-1.5 rounded bg-surface-tertiary/60 text-[11px] border border-surface-border/50"
+                    >
+                      <span className="truncate text-slate-200">{t.title}</span>
+                      <span className="text-slate-500 shrink-0 ml-2 font-mono text-[10px]">{t.domain}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 py-3 border-t border-surface-border bg-surface-secondary/30">
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="w-full py-2 px-3 rounded-lg text-xs font-semibold text-slate-300 hover:text-white hover:bg-surface-secondary border border-surface-border transition-colors"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

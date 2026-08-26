@@ -42,6 +42,16 @@ export interface TabGroup {
   confidence: number;
 }
 
+// ─── Session Timeline Event ───
+export interface SessionTimelineEvent {
+  id: string;
+  time: string;
+  label: string;
+  description: string;
+  icon: 'start' | 'tab' | 'switch' | 'debug' | 'docs' | 'code' | 'end';
+  domain?: string;
+}
+
 // ─── Work Session ───
 export interface WorkSession {
   id: string;
@@ -56,6 +66,22 @@ export interface WorkSession {
   tags: string[];
   switchCount: number;
   isCurrent?: boolean;
+  suggestedNextStep?: string;
+  timeline?: SessionTimelineEvent[];
+  unfinishedWork?: string;
+}
+
+// ─── Project History ───
+export interface ProjectHistory {
+  id: string;
+  projectName: string;
+  lastActiveAt: string;
+  sessionCount: number;
+  currentTask: string;
+  totalTabsOpened: number;
+  averageContextScore: number;
+  tags: string[];
+  sessions: WorkSession[];
 }
 
 // ─── AI Context Result ───
@@ -80,6 +106,14 @@ export interface AISettings {
   apiKey?: string;
   excludedDomains: string[];
   autoAnalyze: boolean;
+}
+
+// ─── Privacy Settings ───
+export interface PrivacySettings {
+  historyEnabled: boolean;
+  excludedDomains: string[];
+  deleteSessionOnDemand: boolean;
+  clearAllOnExit: boolean;
 }
 
 // ─── Sanitized Tab (privacy-safe for AI) ───
@@ -130,4 +164,6 @@ export interface ContextState {
   lastActivityTime: string;
   aiContext?: AIContextResult;
   aiSettings?: AISettings;
+  projectHistory?: ProjectHistory[];
+  privacySettings?: PrivacySettings;
 }

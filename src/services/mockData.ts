@@ -1,4 +1,4 @@
-import { ContextState, WorkSession, TabItem } from '../types/context';
+import { ContextState, WorkSession, TabItem, ProjectHistory, PrivacySettings } from '../types/context';
 
 export const INITIAL_OPEN_TABS: TabItem[] = [
   {
@@ -58,6 +58,49 @@ export const RECENT_SESSIONS: WorkSession[] = [
     tags: ['Auth', 'Firebase', 'Security', 'React'],
     switchCount: 3,
     isCurrent: true,
+    suggestedNextStep: 'Configure the Google OAuth provider in Firebase Console and test the sign-in flow.',
+    unfinishedWork: 'Google OAuth provider configuration is incomplete. The Firebase project is created but the OAuth consent screen needs setup.',
+    timeline: [
+      {
+        id: 'tl-1',
+        time: '10:15',
+        label: 'Started session',
+        description: 'Opened Firebase documentation',
+        icon: 'start',
+        domain: 'firebase.google.com',
+      },
+      {
+        id: 'tl-2',
+        time: '10:25',
+        label: 'Opened GitHub',
+        description: 'Reviewed auth-middleware.ts implementation',
+        icon: 'code',
+        domain: 'github.com',
+      },
+      {
+        id: 'tl-3',
+        time: '10:38',
+        label: 'Debugged OAuth flow',
+        description: 'Checked useEffect cleanup in React docs',
+        icon: 'debug',
+        domain: 'react.dev',
+      },
+      {
+        id: 'tl-4',
+        time: '10:51',
+        label: 'Researched token refresh',
+        description: 'Viewed Stack Overflow for ID token strategy',
+        icon: 'docs',
+        domain: 'stackoverflow.com',
+      },
+      {
+        id: 'tl-5',
+        time: '11:02',
+        label: 'Context switch detected',
+        description: 'Switched from Firebase to GitHub',
+        icon: 'switch',
+      },
+    ],
   },
   {
     id: 'sess-102',
@@ -97,6 +140,34 @@ export const RECENT_SESSIONS: WorkSession[] = [
     tags: ['Payments', 'Stripe', 'NodeJS'],
     switchCount: 1,
     isCurrent: false,
+    suggestedNextStep: 'Write unit tests for the idempotency key validation logic.',
+    unfinishedWork: 'Webhook retry logic needs a dead-letter queue for failed events.',
+    timeline: [
+      {
+        id: 'tl-ft-1',
+        time: '07:10',
+        label: 'Started session',
+        description: 'Opened Stripe webhook documentation',
+        icon: 'start',
+        domain: 'stripe.com',
+      },
+      {
+        id: 'tl-ft-2',
+        time: '07:22',
+        label: 'Code review',
+        description: 'Reviewed PR #42 for stripe-handler.ts',
+        icon: 'code',
+        domain: 'github.com',
+      },
+      {
+        id: 'tl-ft-3',
+        time: '07:45',
+        label: 'Schema update',
+        description: 'Updated Prisma schema for webhook events',
+        icon: 'docs',
+        domain: 'prisma.io',
+      },
+    ],
   },
   {
     id: 'sess-103',
@@ -128,8 +199,90 @@ export const RECENT_SESSIONS: WorkSession[] = [
     tags: ['IoT', 'WebSockets', 'RxJS'],
     switchCount: 5,
     isCurrent: false,
+    suggestedNextStep: 'Implement connection state recovery for dropped WebSocket connections.',
+    unfinishedWork: 'Backpressure handling is partially implemented; buffer overflow on high-frequency streams needs testing.',
+    timeline: [
+      {
+        id: 'tl-mv-1',
+        time: '14:00',
+        label: 'Started session',
+        description: 'Opened Socket.IO connection recovery docs',
+        icon: 'start',
+        domain: 'socket.io',
+      },
+      {
+        id: 'tl-mv-2',
+        time: '14:20',
+        label: 'Researched throttling',
+        description: 'Reviewed RxJS throttleTime operators',
+        icon: 'docs',
+        domain: 'rxjs.dev',
+      },
+      {
+        id: 'tl-mv-3',
+        time: '14:45',
+        label: 'Implemented throttling',
+        description: 'Added bufferTime operator to pipeline',
+        icon: 'code',
+        domain: 'rxjs.dev',
+      },
+    ],
   },
 ];
+
+export const PROJECT_HISTORY: ProjectHistory[] = [
+  {
+    id: 'ph-1',
+    projectName: 'Smart Civic Reporter',
+    lastActiveAt: 'Just now',
+    sessionCount: 12,
+    currentTask: 'Firebase Authentication',
+    totalTabsOpened: 47,
+    averageContextScore: 84,
+    tags: ['Auth', 'Firebase', 'React', 'Next.js'],
+    sessions: [RECENT_SESSIONS[0]],
+  },
+  {
+    id: 'ph-2',
+    projectName: 'College Assignment',
+    lastActiveAt: '2 days ago',
+    sessionCount: 8,
+    currentTask: 'Research Paper on ML Models',
+    totalTabsOpened: 31,
+    averageContextScore: 72,
+    tags: ['Research', 'ML', 'Python'],
+    sessions: [],
+  },
+  {
+    id: 'ph-3',
+    projectName: 'Portfolio',
+    lastActiveAt: '4 days ago',
+    sessionCount: 5,
+    currentTask: 'Hero Section Animation',
+    totalTabsOpened: 18,
+    averageContextScore: 91,
+    tags: ['Frontend', 'CSS', 'GSAP'],
+    sessions: [],
+  },
+  {
+    id: 'ph-4',
+    projectName: 'Research',
+    lastActiveAt: '1 week ago',
+    sessionCount: 3,
+    currentTask: 'Quantum Computing Survey',
+    totalTabsOpened: 22,
+    averageContextScore: 68,
+    tags: ['Academic', 'arXiv', 'Physics'],
+    sessions: [],
+  },
+];
+
+export const DEFAULT_PRIVACY_SETTINGS: PrivacySettings = {
+  historyEnabled: true,
+  excludedDomains: [],
+  deleteSessionOnDemand: true,
+  clearAllOnExit: false,
+};
 
 export const INITIAL_CONTEXT_STATE: ContextState = {
   activeProject: 'Smart Civic Reporter',
@@ -152,4 +305,6 @@ export const INITIAL_CONTEXT_STATE: ContextState = {
   ],
   sessionStartTime: new Date(Date.now() - 48 * 60 * 1000).toISOString(),
   lastActivityTime: new Date().toISOString(),
+  projectHistory: PROJECT_HISTORY,
+  privacySettings: DEFAULT_PRIVACY_SETTINGS,
 };
