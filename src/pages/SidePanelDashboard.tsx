@@ -4,7 +4,7 @@ import { CurrentContextCard } from '../components/CurrentContextCard';
 import { ContextScoreGauge } from '../components/ContextScoreGauge';
 import { OpenTabsList } from '../components/OpenTabsList';
 import { RecentSessions } from '../components/RecentSessions';
-import { PrivacySettingsPanel } from '../components/PrivacySettings';
+import { PrivacyCenter } from '../components/PrivacyCenter';
 import { QuickActions } from '../components/QuickActions';
 import { ResumeWorkModal } from '../components/ResumeWorkModal';
 import { ContextSwitchTimeline } from '../components/ContextSwitchTimeline';
@@ -14,6 +14,7 @@ import { DistractionAlert } from '../components/DistractionAlert';
 import { AISettingsPanel } from '../components/AISettingsPanel';
 import { ContextHistory } from '../components/ContextHistory';
 import { SessionTimeline } from '../components/SessionTimeline';
+import { DemoMode } from '../components/DemoMode';
 import { storageService } from '../services/storageService';
 import { aiService } from '../services/ai/aiService';
 import {
@@ -28,7 +29,7 @@ import {
   INITIAL_CONTEXT_STATE,
   DEFAULT_PRIVACY_SETTINGS,
 } from '../services/mockData';
-import { CheckCircle2, Wifi, WifiOff, Eye } from 'lucide-react';
+import { CheckCircle2, Wifi, WifiOff, Eye, Monitor } from 'lucide-react';
 
 const POLL_INTERVAL_MS = 3000;
 
@@ -48,6 +49,9 @@ export const SidePanelDashboard: React.FC = () => {
   const [isAiLoading, setIsAiLoading] = useState(false);
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
   const [isBreakMode, setIsBreakMode] = useState(false);
+
+  // Demo Mode
+  const [isDemoActive, setIsDemoActive] = useState(false);
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -236,6 +240,17 @@ export const SidePanelDashboard: React.FC = () => {
     runAiAnalysis(state, true);
   };
 
+  const handleEnterDemoMode = (demoState: ContextState) => {
+    setIsDemoActive(true);
+    setState(demoState);
+    setAiResult(null);
+  };
+
+  const handleExitDemoMode = () => {
+    setIsDemoActive(false);
+    loadContext(true);
+  };
+
   const handleContinueWorking = () => {
     setShowDistractionAlert(false);
     showToast('Focus reaffirmed. Keep going!');
@@ -275,11 +290,20 @@ export const SidePanelDashboard: React.FC = () => {
       <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full pb-8">
         {/* Live / Fallback Status Banner */}
         <div className={`flex items-center gap-2 p-2.5 rounded-lg text-xs ${
-          isLive
-            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-            : 'bg-brand-500/10 border border-brand-500/20 text-brand-300'
+          isDemoActive
+            ? 'bg-accent-violet/10 border border-accent-violet/20 text-accent-violet'
+            : isLive
+              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+              : 'bg-brand-500/10 border border-brand-500/20 text-brand-300'
         }`}>
-          {isLive ? (
+          {isDemoActive ? (
+            <>
+              <Monitor className="w-4 h-4 text-accent-violet shrink-0" />
+              <span>
+                <strong>Demo Mode</strong> — Simulated walkthrough active. Click steps to explore.
+              </span>
+            </>
+          ) : isLive ? (
             <>
               <Wifi className="w-4 h-4 text-emerald-400 shrink-0" />
               <span>
@@ -295,6 +319,12 @@ export const SidePanelDashboard: React.FC = () => {
             </>
           )}
         </div>
+
+        {/* Interactive Demo Walkthrough */}
+        <DemoMode
+          onEnterDemoMode={handleEnterDemoMode}
+          onExitDemoMode={handleExitDemoMode}
+        />
 
         {/* Non-blocking Distraction Alert */}
         <DistractionAlert
@@ -373,8 +403,8 @@ export const SidePanelDashboard: React.FC = () => {
           onSaveSettings={handleSaveAISettings}
         />
 
-        {/* Privacy Settings */}
-        <PrivacySettingsPanel
+        {/* Privacy Center */}
+        <PrivacyCenter
           settings={state.privacySettings || DEFAULT_PRIVACY_SETTINGS}
           onSave={handleSavePrivacySettings}
           onClearAllSessions={handleClearData}
