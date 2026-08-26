@@ -30,6 +30,11 @@ app.use("/api/settings", settingsRoutes);
 
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`ContextSwitch backend running on port ${PORT}`);
-});
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`ContextSwitch backend running on port ${PORT}`);
+  });
+}
+
+module.exports = app;
+
