@@ -9,6 +9,7 @@ const errorHandler = require("./middleware/errorHandler");
 const sessionRoutes = require("./routes/sessionRoutes");
 const projectRoutes = require("./routes/projectRoutes");
 const settingsRoutes = require("./routes/settingsRoutes");
+const aiRoutes = require("./routes/aiRoutes");
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,12 +22,13 @@ app.use(morgan("dev"));
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
+  res.json({ status: "ok", service: "ContextSwitch Backend", timestamp: new Date().toISOString() });
 });
 
 app.use("/api/sessions", sessionRoutes);
 app.use("/api/projects", projectRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/ai", aiRoutes);
 
 app.use(errorHandler);
 
@@ -37,4 +39,3 @@ if (require.main === module) {
 }
 
 module.exports = app;
-

@@ -1,30 +1,25 @@
 const UserSettings = require("../models/UserSettings");
 
 const getSettings = async (req, res) => {
-  const { userId } = req.query;
+  const { userId, deviceId = "dev_default" } = req.query;
 
-  if (!userId) {
-    return res.status(400).json({ error: "userId is required" });
-  }
-
-  let settings = await UserSettings.findOne({ userId });
+  const query = userId ? { userId } : { deviceId };
+  let settings = await UserSettings.findOne(query);
 
   if (!settings) {
-    settings = await UserSettings.create({ userId });
+    settings = await UserSettings.create(query);
   }
 
   res.json(settings);
 };
 
 const updateSettings = async (req, res) => {
-  const { userId, ...updates } = req.body;
+  const { userId, deviceId = "dev_default", ...updates } = req.body;
 
-  if (!userId) {
-    return res.status(400).json({ error: "userId is required in body" });
-  }
+  const query = userId ? { userId } : { deviceId };
 
   const settings = await UserSettings.findOneAndUpdate(
-    { userId },
+    query,
     { $set: updates },
     { new: true, runValidators: true, upsert: true }
   );

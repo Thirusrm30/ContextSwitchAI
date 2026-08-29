@@ -14,9 +14,9 @@ import { DistractionAlert } from '../components/DistractionAlert';
 import { AISettingsPanel } from '../components/AISettingsPanel';
 import { ContextHistory } from '../components/ContextHistory';
 import { SessionTimeline } from '../components/SessionTimeline';
-import { DemoMode } from '../components/DemoMode';
 import { storageService } from '../services/storageService';
 import { aiService } from '../services/ai/aiService';
+import { apiClient } from '../services/apiClient';
 import {
   ContextState,
   WorkSession,
@@ -26,20 +26,21 @@ import {
   PrivacySettings as PrivacySettingsType,
 } from '../types/context';
 import {
-  INITIAL_CONTEXT_STATE,
+  EMPTY_CONTEXT_STATE,
   DEFAULT_PRIVACY_SETTINGS,
-} from '../services/mockData';
-import { CheckCircle2, Wifi, WifiOff, Eye, Monitor } from 'lucide-react';
+} from '../services/defaults';
+import { CheckCircle2, Wifi, WifiOff, Eye, Database } from 'lucide-react';
 
-const POLL_INTERVAL_MS = 3000;
+const POLL_INTERVAL_MS = 2500;
 
 export const SidePanelDashboard: React.FC = () => {
-  const [state, setState] = useState<ContextState>(INITIAL_CONTEXT_STATE);
+  const [state, setState] = useState<ContextState>(EMPTY_CONTEXT_STATE);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [selectedSessionForResume, setSelectedSessionForResume] = useState<WorkSession | null>(null);
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [isLive, setIsLive] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(false);
   const [isClearing, setIsClearing] = useState(false);
   const [summaryModalSession, setSummaryModalSession] = useState<WorkSession | null>(null);
   const [showSummaryModal, setShowSummaryModal] = useState(false);
@@ -50,16 +51,16 @@ export const SidePanelDashboard: React.FC = () => {
   const [showDistractionAlert, setShowDistractionAlert] = useState(false);
   const [isBreakMode, setIsBreakMode] = useState(false);
 
-  // Demo Mode
-  const [isDemoActive, setIsDemoActive] = useState(false);
-
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const runAiAnalysis = useCallback(async (
     currentState: ContextState,
     force = false
   ) => {
-    if (!currentState.openTabs || currentState.openTabs.length === 0) return;
+    if (!currentState.openTabs || currentState.openTabs.length === 0) {
+      setAiResult(null);
+      return;
+    }
 
     if (force) {
       aiService.invalidateCache();
@@ -68,7 +69,7 @@ export const SidePanelDashboard: React.FC = () => {
     setIsAiLoading(true);
     try {
       const sessionDurationMins = currentState.sessionStartTime
-        ? Math.floor((Date.now() - new Date(currentState.sessionStartTime).getTime()) / 60000)
+        ? Math.max(1, Math.floor((Date.now() - new Date(currentState.sessionStartTime).getTime()) / 60000))
         : 0;
 
       const result = await aiService.analyzeCurrentContext(
@@ -94,23 +95,32 @@ export const SidePanelDashboard: React.FC = () => {
   const loadContext = useCallback(async (showRefreshIndicator = false) => {
     if (showRefreshIndicator) setIsRefreshing(true);
     try {
-      const data = await storageService.loadLiveContext();
+      const [data, serverHealthy] = await Promise.all([
+        storageService.loadLiveContext(),
+        apiClient.checkHealth()
+      ]);
+
       setState(data);
+      setBackendConnected(serverHealthy);
 
       if (data.aiSettings) {
         aiService.updateSettings(data.aiSettings);
       }
 
-      const hasLiveTabs = data.openTabs.some(t => typeof t.id === 'number');
+      const hasLiveTabs = data.openTabs && data.openTabs.length > 0;
       setIsLive(hasLiveTabs);
 
-      runAiAnalysis(data);
+      if (hasLiveTabs) {
+        runAiAnalysis(data);
+      } else {
+        setAiResult(null);
+      }
     } catch (e) {
-      console.error('Failed to load context', e);
+      console.error('[ContextSwitch] Failed to load live context:', e);
       setIsLive(false);
     } finally {
       if (showRefreshIndicator) {
-        setTimeout(() => setIsRefreshing(false), 400);
+        setTimeout(() => setIsRefreshing(false), 300);
       }
     }
   }, [runAiAnalysis]);
@@ -139,6 +149,8 @@ export const SidePanelDashboard: React.FC = () => {
     if (targetSession) {
       setSelectedSessionForResume(targetSession);
       setIsResumeModalOpen(true);
+    } else {
+      showToast('No previous sessions recorded yet. Start working to build memory.');
     }
   };
 
@@ -148,44 +160,43 @@ export const SidePanelDashboard: React.FC = () => {
   };
 
   const handleResumeProject = (project: ProjectHistory) => {
-    if (project.sessions.length > 0) {
+    if (project.sessions && project.sessions.length > 0) {
       setSelectedSessionForResume(project.sessions[0]);
       setIsResumeModalOpen(true);
     } else {
-      showToast(`Resume not available for "${project.projectName}" — no saved sessions.`);
+      showToast(`No saved session for "${project.projectName}".`);
     }
   };
 
   const handleConfirmRestore = async (session: WorkSession) => {
-    const updatedSessions = state.recentSessions.map((s) => ({
-      ...s,
-      isCurrent: s.id === session.id,
-    }));
-
-    const newState: ContextState = {
-      ...state,
-      activeProject: session.projectName,
-      currentTask: session.currentTask,
-      contextScore: session.contextScore,
-      openTabs: session.openTabs,
-      recentSessions: updatedSessions,
-    };
-
-    setState(newState);
-    await storageService.saveState(newState);
     setIsResumeModalOpen(false);
 
     if (typeof chrome !== 'undefined' && chrome.tabs) {
+      let restoredCount = 0;
       session.openTabs.forEach((tab) => {
-        chrome.tabs.create({ url: tab.url, active: false });
+        if (tab.url && !tab.url.startsWith('chrome://')) {
+          chrome.tabs.create({ url: tab.url, active: false });
+          restoredCount++;
+        }
       });
+      showToast(`Restored context: "${session.projectName}" (${restoredCount} tabs opened)`);
+    } else {
+      showToast(`Context "${session.projectName}" selected.`);
     }
-
-    showToast(`Restored context: "${session.projectName}" (${session.openTabs.length} tabs)`);
   };
 
   const handleSaveSnapshot = async () => {
-    showToast(`Context snapshot saved: ${state.activeProject}`);
+    if (state.openTabs.length === 0) {
+      showToast('No active tabs to save into a session.');
+      return;
+    }
+    const saved = await storageService.saveSnapshot(aiResult?.summary);
+    if (saved) {
+      showToast(`Context snapshot saved: ${saved.projectName}`);
+      loadContext(false);
+    } else {
+      showToast('Snapshot saved to local workspace.');
+    }
   };
 
   const handleClearData = async () => {
@@ -194,7 +205,8 @@ export const SidePanelDashboard: React.FC = () => {
       await storageService.clearAllData();
       setAiResult(null);
       setShowDistractionAlert(false);
-      showToast('All context data cleared successfully');
+      setState(EMPTY_CONTEXT_STATE);
+      showToast('All real context data cleared successfully');
       await loadContext(true);
     } catch (e) {
       console.error('Failed to clear data', e);
@@ -205,10 +217,9 @@ export const SidePanelDashboard: React.FC = () => {
   };
 
   const handleDeleteSession = async (session: WorkSession) => {
+    await storageService.deleteSession(session.id);
     const updatedSessions = state.recentSessions.filter((s) => s.id !== session.id);
-    const newState: ContextState = { ...state, recentSessions: updatedSessions };
-    setState(newState);
-    await storageService.saveState(newState);
+    setState(prev => ({ ...prev, recentSessions: updatedSessions }));
     showToast(`Deleted session: "${session.projectName}"`);
   };
 
@@ -219,16 +230,13 @@ export const SidePanelDashboard: React.FC = () => {
 
   const handleDeleteProject = async (projectId: string) => {
     const updatedProjects = (state.projectHistory || []).filter((p) => p.id !== projectId);
-    const newState: ContextState = { ...state, projectHistory: updatedProjects };
-    setState(newState);
-    await storageService.saveState(newState);
+    setState(prev => ({ ...prev, projectHistory: updatedProjects }));
     showToast('Project removed from history');
   };
 
   const handleSavePrivacySettings = async (newSettings: PrivacySettingsType) => {
-    const newState: ContextState = { ...state, privacySettings: newSettings };
-    setState(newState);
-    await storageService.saveState(newState);
+    await storageService.savePrivacySettings(newSettings);
+    setState(prev => ({ ...prev, privacySettings: newSettings }));
     showToast('Privacy settings updated');
   };
 
@@ -236,19 +244,8 @@ export const SidePanelDashboard: React.FC = () => {
     await storageService.saveAISettings(newSettings);
     aiService.updateSettings(newSettings);
     setState(prev => ({ ...prev, aiSettings: newSettings }));
-    showToast(`AI mode set to: ${newSettings.processingMode === 'cloud_ai' ? 'Cloud AI' : 'Local Only'}`);
+    showToast(`AI mode set to: ${newSettings.processingMode === 'cloud_ai' ? 'Cloud AI (Backend)' : 'Local Only'}`);
     runAiAnalysis(state, true);
-  };
-
-  const handleEnterDemoMode = (demoState: ContextState) => {
-    setIsDemoActive(true);
-    setState(demoState);
-    setAiResult(null);
-  };
-
-  const handleExitDemoMode = () => {
-    setIsDemoActive(false);
-    loadContext(true);
   };
 
   const handleContinueWorking = () => {
@@ -259,21 +256,21 @@ export const SidePanelDashboard: React.FC = () => {
   const handleTakeBreak = () => {
     setShowDistractionAlert(false);
     setIsBreakMode(true);
-    showToast('Break mode enabled. Take your time!');
+    showToast('Break mode enabled.');
   };
 
   const activeTab = state.openTabs.find(t => t.isActive) || null;
   const sessionDurationMinutes = state.sessionStartTime
-    ? Math.floor((Date.now() - new Date(state.sessionStartTime).getTime()) / 60000)
+    ? Math.max(1, Math.floor((Date.now() - new Date(state.sessionStartTime).getTime()) / 60000))
     : 0;
 
-  const displayProject = aiResult?.project && aiResult.project !== 'Unknown'
+  const displayProject = aiResult?.project && aiResult.project !== 'No Active Context'
     ? aiResult.project
-    : state.activeProject;
+    : (state.activeProject || 'No active context');
 
-  const displayTask = aiResult?.task && aiResult.task !== 'Analysis failed'
+  const displayTask = aiResult?.task && aiResult.task !== 'No open tabs detected'
     ? aiResult.task
-    : state.currentTask;
+    : (state.currentTask || 'Open tabs to begin');
 
   return (
     <div className="flex flex-col min-h-screen bg-background text-slate-100 font-sans">
@@ -288,43 +285,32 @@ export const SidePanelDashboard: React.FC = () => {
       )}
 
       <main className="flex-1 p-4 space-y-4 max-w-lg mx-auto w-full pb-8">
-        {/* Live / Fallback Status Banner */}
-        <div className={`flex items-center gap-2 p-2.5 rounded-lg text-xs ${
-          isDemoActive
-            ? 'bg-accent-violet/10 border border-accent-violet/20 text-accent-violet'
-            : isLive
-              ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
-              : 'bg-brand-500/10 border border-brand-500/20 text-brand-300'
+        {/* Live / Backend Status Banner */}
+        <div className={`flex items-center justify-between p-2.5 rounded-lg text-xs ${
+          isLive
+            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+            : 'bg-slate-800/80 border border-slate-700 text-slate-300'
         }`}>
-          {isDemoActive ? (
-            <>
-              <Monitor className="w-4 h-4 text-accent-violet shrink-0" />
-              <span>
-                <strong>Demo Mode</strong> — Simulated walkthrough active. Click steps to explore.
-              </span>
-            </>
-          ) : isLive ? (
-            <>
+          <div className="flex items-center gap-2">
+            {isLive ? (
               <Wifi className="w-4 h-4 text-emerald-400 shrink-0" />
-              <span>
-                <strong>Live Tracking Active</strong> — Monitoring {state.openTabs.length} tabs across {state.tabGroups?.length || 0} groups.
-              </span>
-            </>
-          ) : (
-            <>
-              <WifiOff className="w-4 h-4 text-brand-400 shrink-0" />
-              <span>
-                <strong>Preview Mode</strong> — Load as extension for live browser tracking. Showing mock data.
-              </span>
-            </>
-          )}
-        </div>
+            ) : (
+              <WifiOff className="w-4 h-4 text-slate-400 shrink-0" />
+            )}
+            <span>
+              {isLive ? (
+                <><strong>Live Browser Tracking</strong> — {state.openTabs.length} tab{state.openTabs.length !== 1 ? 's' : ''} active</>
+              ) : (
+                <>No active context detected yet. Open browser tabs to begin.</>
+              )}
+            </span>
+          </div>
 
-        {/* Interactive Demo Walkthrough */}
-        <DemoMode
-          onEnterDemoMode={handleEnterDemoMode}
-          onExitDemoMode={handleExitDemoMode}
-        />
+          <div className="flex items-center gap-1 text-[10px] shrink-0 font-mono">
+            <Database className={`w-3 h-3 ${backendConnected ? 'text-emerald-400' : 'text-amber-400'}`} />
+            <span>{backendConnected ? 'MongoDB Connected' : 'Local Storage'}</span>
+          </div>
+        </div>
 
         {/* Non-blocking Distraction Alert */}
         <DistractionAlert
@@ -348,7 +334,7 @@ export const SidePanelDashboard: React.FC = () => {
         <QuickActions
           onResumeClick={handleResumePrimary}
           onSaveSnapshot={handleSaveSnapshot}
-          isCurrentActive={true}
+          isCurrentActive={state.openTabs.length > 0}
         />
 
         {/* Current Context */}
@@ -376,16 +362,25 @@ export const SidePanelDashboard: React.FC = () => {
         <OpenTabsList tabs={state.openTabs} />
 
         {/* Context Switch Timeline */}
-        <ContextSwitchTimeline events={state.contextSwitchEvents || []} />
+        {state.contextSwitchEvents && state.contextSwitchEvents.length > 0 && (
+          <ContextSwitchTimeline events={state.contextSwitchEvents} />
+        )}
 
         {/* Recent Sessions */}
-        {state.recentSessions.length > 0 && (
+        {state.recentSessions.length > 0 ? (
           <RecentSessions
             sessions={state.recentSessions}
             onResumeSession={handleResumeSpecificSession}
             onDeleteSession={handleDeleteSession}
             onViewSummary={handleViewSummary}
           />
+        ) : (
+          <div className="p-4 rounded-xl bg-surface-secondary/40 border border-surface-border text-center space-y-1">
+            <p className="text-xs font-semibold text-slate-300">No Previous Sessions</p>
+            <p className="text-[11px] text-slate-400">
+              Work sessions will automatically be remembered here as you browse.
+            </p>
+          </div>
         )}
 
         {/* Context History (Recent Work by Project) */}
@@ -429,39 +424,31 @@ export const SidePanelDashboard: React.FC = () => {
       {showSummaryModal && summaryModalSession && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-background/80 backdrop-blur-sm animate-fadeIn">
           <div className="w-full max-w-md rounded-2xl bg-surface border border-surface-border shadow-2xl overflow-hidden max-h-[85vh] flex flex-col">
-            {/* Header */}
-            <div className="px-5 pt-5 pb-3 border-b border-surface-border">
-              <div className="flex items-start justify-between">
-                <div>
-                  <h3 className="text-sm font-bold text-white tracking-tight">
-                    Session Summary
-                  </h3>
-                  <p className="text-[11px] text-slate-400 mt-0.5">
-                    {summaryModalSession.projectName} — {summaryModalSession.currentTask}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setShowSummaryModal(false)}
-                  className="p-1 text-slate-400 hover:text-white rounded-md hover:bg-surface-secondary transition-colors"
-                >
-                  <span className="text-lg leading-none">&times;</span>
-                </button>
+            <div className="px-5 pt-5 pb-3 border-b border-surface-border flex items-start justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-white tracking-tight">Session Summary</h3>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  {summaryModalSession.projectName} — {summaryModalSession.currentTask}
+                </p>
               </div>
+              <button
+                onClick={() => setShowSummaryModal(false)}
+                className="p-1 text-slate-400 hover:text-white rounded-md hover:bg-surface-secondary transition-colors"
+              >
+                <span className="text-lg leading-none">&times;</span>
+              </button>
             </div>
 
-            {/* Scrollable Content */}
             <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4 custom-scrollbar">
-              {/* AI Summary */}
               <div className="p-3 rounded-xl bg-surface-secondary/70 border border-surface-border">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-brand-400 block mb-1">
-                  AI Summary
+                  Summary
                 </span>
                 <p className="text-xs text-slate-300 leading-relaxed">
                   {summaryModalSession.summary}
                 </p>
               </div>
 
-              {/* Suggested Next Step */}
               {summaryModalSession.suggestedNextStep && (
                 <div className="p-3 rounded-xl bg-gradient-to-r from-brand-500/15 to-accent-violet/10 border border-brand-500/30">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-brand-300 block mb-1">
@@ -473,7 +460,6 @@ export const SidePanelDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* Unfinished Work */}
               {summaryModalSession.unfinishedWork && (
                 <div className="p-3 rounded-xl bg-amber-500/5 border border-amber-500/20">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-amber-400 block mb-1">
@@ -485,7 +471,6 @@ export const SidePanelDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* Session Timeline */}
               {summaryModalSession.timeline && summaryModalSession.timeline.length > 0 && (
                 <div className="space-y-2">
                   <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1">
@@ -498,7 +483,6 @@ export const SidePanelDashboard: React.FC = () => {
                 </div>
               )}
 
-              {/* Tabs List */}
               <div className="space-y-1.5">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
                   Tabs in Session ({summaryModalSession.openTabs.length})
@@ -517,7 +501,6 @@ export const SidePanelDashboard: React.FC = () => {
               </div>
             </div>
 
-            {/* Footer */}
             <div className="px-5 py-3 border-t border-surface-border bg-surface-secondary/30">
               <button
                 onClick={() => setShowSummaryModal(false)}

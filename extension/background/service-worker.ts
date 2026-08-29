@@ -1,13 +1,10 @@
 /**
  * ContextSwitch - Background Service Worker (Manifest V3)
- * Layer 2: Real-time tab tracking, context switch detection, time tracking.
- *
- * This runs as the extension's background service worker. It listens to
- * Chrome tab/window events, maintains a live context state in memory,
- * and persists it to chrome.storage.local.
+ * Layer 2: Real-time tab tracking, context switch detection, time tracking,
+ * and live session recording with MongoDB / local storage sync.
  */
 
-// ─── Inline Context Engine (service worker can't import from src/) ───
+// ─── Types ───
 
 type DomainCategory =
   | 'development'
@@ -49,6 +46,31 @@ interface TabGroup {
   confidence: number;
 }
 
+interface WorkSession {
+  id: string;
+  projectName: string;
+  currentTask: string;
+  contextScore: number;
+  startedAt: string;
+  lastActiveAt: string;
+  durationMinutes: number;
+  openTabs: TabItem[];
+  summary: string;
+  tags: string[];
+  switchCount: number;
+  isCurrent?: boolean;
+  suggestedNextStep?: string;
+  unfinishedWork?: string;
+  timeline?: Array<{
+    id: string;
+    time: string;
+    label: string;
+    description: string;
+    icon: 'start' | 'tab' | 'switch' | 'debug' | 'docs' | 'code' | 'end';
+    domain?: string;
+  }>;
+}
+
 interface LiveContextState {
   openTabs: TabItem[];
   activeTabId: number | null;
@@ -62,6 +84,7 @@ interface LiveContextState {
   lastActivityTime: string;
   activeProject: string;
   currentTask: string;
+  recentSessions: WorkSession[];
 }
 
 // ─── Domain Categorization Rules ───
@@ -96,6 +119,8 @@ const DOMAIN_RULES: Record<string, DomainCategory> = {
   'tailwindcss.com': 'development',
   'stripe.com': 'development',
   'dev.to': 'development',
+  'localhost': 'development',
+  '127.0.0.1': 'development',
   'docs.google.com': 'productivity',
   'sheets.google.com': 'productivity',
   'slides.google.com': 'productivity',
@@ -150,7 +175,8 @@ function categorizeDomain(domain: string): DomainCategory {
     if (DOMAIN_RULES[parent]) return DOMAIN_RULES[parent];
   }
   if (/github\.io$/i.test(normalized) || /\.dev$/i.test(normalized) ||
-      /developer\./i.test(normalized) || /docs\./i.test(normalized)) {
+      /developer\./i.test(normalized) || /docs\./i.test(normalized) ||
+      /localhost/i.test(normalized) || /127\.0\.0\.1/i.test(normalized)) {
     return 'development';
   }
   return 'general';
@@ -181,11 +207,11 @@ function groupTabsByProject(tabs: TabItem[]): TabGroup[] {
     entertainment: 'Entertainment',
     research: 'Research',
     social: 'Social',
-    general: 'Other Browsing',
+    general: 'General Browsing',
   };
   for (const [cat, catTabs] of Object.entries(buckets)) {
     groups.push({
-      groupName: labelMap[cat] || 'Other Browsing',
+      groupName: labelMap[cat] || 'General Browsing',
       tabs: catTabs,
       primaryCategory: cat as DomainCategory,
       confidence: Math.min(95, 55 + catTabs.length * 8),
@@ -234,25 +260,33 @@ let liveState: LiveContextState = {
   sessionStartTime: new Date().toISOString(),
   lastActivityTime: new Date().toISOString(),
   activeProject: 'Detecting...',
-  currentTask: 'Analyzing browser activity...',
+  currentTask: 'Browsing',
+  recentSessions: [],
 };
 
+let excludedDomains: string[] = [];
 let saveTimeout: ReturnType<typeof setTimeout> | null = null;
+const SESSIONS_STORAGE_KEY = 'cs_saved_sessions_v2';
+const STATE_STORAGE_KEY = 'cs_live_context_v2';
+const BACKEND_API = 'http://localhost:5000/api';
 
-// ─── Persistence ───
-
-const STORAGE_KEY = 'cs_live_context_v2';
+// ─── Persistence & Sync ───
 
 async function loadPersistedState(): Promise<void> {
   try {
-    const result = await chrome.storage.local.get(STORAGE_KEY);
-    if (result[STORAGE_KEY]) {
-      const persisted = result[STORAGE_KEY] as LiveContextState;
-      // Merge persisted state but re-detect tabs fresh
+    const result = await chrome.storage.local.get([STATE_STORAGE_KEY, SESSIONS_STORAGE_KEY, 'cs_privacy_settings']);
+    if (result[STATE_STORAGE_KEY]) {
+      const persisted = result[STATE_STORAGE_KEY] as LiveContextState;
       liveState.contextSwitchEvents = persisted.contextSwitchEvents || [];
       liveState.switchesToday = persisted.switchesToday || 0;
       liveState.deepWorkMinutes = persisted.deepWorkMinutes || 0;
       liveState.sessionStartTime = persisted.sessionStartTime || new Date().toISOString();
+    }
+    if (result[SESSIONS_STORAGE_KEY]) {
+      liveState.recentSessions = result[SESSIONS_STORAGE_KEY] || [];
+    }
+    if (result.cs_privacy_settings?.excludedDomains) {
+      excludedDomains = result.cs_privacy_settings.excludedDomains;
     }
   } catch (e) {
     console.warn('[ContextSwitch] Failed to load persisted state:', e);
@@ -262,14 +296,20 @@ async function loadPersistedState(): Promise<void> {
 function debouncedSave(): void {
   if (saveTimeout) clearTimeout(saveTimeout);
   saveTimeout = setTimeout(() => {
-    chrome.storage.local.set({ [STORAGE_KEY]: liveState }).catch((e: Error) => {
+    chrome.storage.local.set({
+      [STATE_STORAGE_KEY]: liveState,
+      [SESSIONS_STORAGE_KEY]: liveState.recentSessions
+    }).catch((e: Error) => {
       console.warn('[ContextSwitch] Save error:', e);
     });
-  }, 2000);
+  }, 1500);
 }
 
 function forceSave(): void {
-  chrome.storage.local.set({ [STORAGE_KEY]: liveState }).catch((e: Error) => {
+  chrome.storage.local.set({
+    [STATE_STORAGE_KEY]: liveState,
+    [SESSIONS_STORAGE_KEY]: liveState.recentSessions
+  }).catch((e: Error) => {
     console.warn('[ContextSwitch] Force save error:', e);
   });
 }
@@ -298,7 +338,6 @@ async function refreshAllTabs(): Promise<void> {
     const activeTabsArr = await chrome.tabs.query({ active: true, currentWindow: true });
     const activeTabId = activeTabsArr[0]?.id || null;
 
-    // Preserve time spent from existing tracked tabs
     const existingTimeMap = new Map<number, number>();
     for (const t of liveState.openTabs) {
       if (typeof t.id === 'number' && t.timeSpentSeconds) {
@@ -307,10 +346,9 @@ async function refreshAllTabs(): Promise<void> {
     }
 
     liveState.openTabs = tabs
-      .filter(t => t.id !== undefined && t.url && !t.url.startsWith('chrome://'))
+      .filter(t => t.id !== undefined && t.url && !t.url.startsWith('chrome://') && !t.url.startsWith('edge://'))
       .map(t => {
         const item = chromeTabToTabItem(t, t.id === activeTabId);
-        // Restore tracked time
         if (typeof t.id === 'number' && existingTimeMap.has(t.id)) {
           item.timeSpentSeconds = existingTimeMap.get(t.id)!;
         }
@@ -326,7 +364,7 @@ async function refreshAllTabs(): Promise<void> {
 }
 
 function recalculate(): void {
-  const elapsed = (Date.now() - new Date(liveState.sessionStartTime).getTime()) / 60000;
+  const elapsed = Math.max(1, Math.floor((Date.now() - new Date(liveState.sessionStartTime).getTime()) / 60000));
   liveState.tabGroups = groupTabsByProject(liveState.openTabs);
   liveState.contextScore = computeContextScore(
     liveState.openTabs,
@@ -336,50 +374,96 @@ function recalculate(): void {
   liveState.focusState = detectFocusState(liveState.contextScore);
   liveState.lastActivityTime = new Date().toISOString();
 
-  // Derive active project from the dominant tab group
   if (liveState.tabGroups.length > 0) {
     const sorted = [...liveState.tabGroups].sort((a, b) => b.tabs.length - a.tabs.length);
     liveState.activeProject = sorted[0].groupName;
+  } else {
+    liveState.activeProject = 'No Active Context';
   }
 
-  // Derive current task from active tab
   const activeTab = liveState.openTabs.find(t => t.isActive);
   if (activeTab) {
     liveState.currentTask = activeTab.title;
+  } else if (liveState.openTabs.length > 0) {
+    liveState.currentTask = liveState.openTabs[0].title;
+  } else {
+    liveState.currentTask = 'No active tabs';
   }
 }
 
-// ─── Side Panel Behavior ───
+// ─── Real Session Lifecycle ───
 
-if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
-  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true })
-    .catch((error: Error) => {
-      console.warn('[ContextSwitch] Failed to set side panel behavior:', error);
-    });
+async function saveCurrentSessionSnapshot(customSummary?: string): Promise<WorkSession | null> {
+  if (liveState.openTabs.length === 0) return null;
+
+  const duration = Math.max(1, Math.floor((Date.now() - new Date(liveState.sessionStartTime).getTime()) / 60000));
+  const activeTab = liveState.openTabs.find(t => t.isActive);
+
+  const newSession: WorkSession = {
+    id: `sess-${Date.now()}`,
+    projectName: liveState.activeProject || 'General Work',
+    currentTask: activeTab?.title || liveState.currentTask || 'Browsing',
+    contextScore: liveState.contextScore,
+    startedAt: liveState.sessionStartTime,
+    lastActiveAt: 'Just now',
+    durationMinutes: duration,
+    openTabs: [...liveState.openTabs],
+    summary: customSummary || `Worked on ${liveState.activeProject} across ${liveState.openTabs.length} tabs.`,
+    tags: Array.from(new Set(liveState.openTabs.map(t => t.domainCategory || 'general'))),
+    switchCount: liveState.contextSwitchEvents.length,
+    isCurrent: false,
+    suggestedNextStep: activeTab ? `Continue review on ${activeTab.domain}` : 'Resume open tabs',
+    timeline: liveState.contextSwitchEvents.slice(-6).map((e, idx) => ({
+      id: `tl-${idx}`,
+      time: new Date(e.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      label: `Switch to ${e.toCategory}`,
+      description: `${e.fromDomain} -> ${e.toDomain}`,
+      icon: 'switch',
+      domain: e.toDomain,
+    })),
+  };
+
+  // Add to local list (up to 30)
+  liveState.recentSessions = [newSession, ...liveState.recentSessions.filter(s => s.id !== newSession.id)].slice(0, 30);
+  forceSave();
+
+  // Try async push to backend MongoDB
+  try {
+    fetch(`${BACKEND_API}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        projectName: newSession.projectName,
+        task: newSession.currentTask,
+        contextScore: newSession.contextScore,
+        durationMinutes: newSession.durationMinutes,
+        startedAt: newSession.startedAt,
+        tabs: newSession.openTabs,
+        summary: newSession.summary,
+        suggestedNextStep: newSession.suggestedNextStep,
+        tags: newSession.tags,
+        switchCount: newSession.switchCount,
+        timeline: newSession.timeline,
+      }),
+    }).catch(() => {});
+  } catch {}
+
+  return newSession;
 }
 
-// ─── Extension Install Lifecycle ───
+// ─── Extension Install & Alarms ───
 
 chrome.runtime.onInstalled.addListener((details) => {
-  console.log('[ContextSwitch] Extension installed/updated:', details.reason);
-
   if (details.reason === 'install') {
     chrome.storage.local.set({
       cs_version: '2.0.0',
       cs_initialized_at: new Date().toISOString(),
       cs_privacy_mode: 'local_only',
-      cs_auto_detect_switch: true,
     });
   }
-
-  // Create heartbeat alarm for time tracking (fires every 1 minute)
   chrome.alarms.create('cs_heartbeat', { periodInMinutes: 1 });
-
-  // Initial tab scan
   refreshAllTabs();
 });
-
-// ─── Also load on service worker startup (not just install) ───
 
 loadPersistedState().then(() => {
   refreshAllTabs();
@@ -407,7 +491,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 chrome.tabs.onActivated.addListener(async (activeInfo) => {
   const previousActiveTab = liveState.openTabs.find(t => t.isActive);
 
-  // Mark all tabs as inactive, then set the new active one
   for (const t of liveState.openTabs) {
     t.isActive = false;
   }
@@ -417,12 +500,13 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
     newActiveTab.isActive = true;
     newActiveTab.lastActivatedAt = new Date().toISOString();
 
-    // Record context switch event if switching between different domains
     if (previousActiveTab && previousActiveTab.id !== newActiveTab.id) {
       const fromDomain = previousActiveTab.domain;
       const toDomain = newActiveTab.domain;
 
-      if (fromDomain && toDomain && fromDomain !== toDomain) {
+      const isExcluded = excludedDomains.some(d => d && (fromDomain.includes(d) || toDomain.includes(d)));
+
+      if (!isExcluded && fromDomain && toDomain && fromDomain !== toDomain) {
         const event: ContextSwitchEvent = {
           id: `cs-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           fromTabTitle: previousActiveTab.title,
@@ -437,14 +521,12 @@ chrome.tabs.onActivated.addListener(async (activeInfo) => {
         liveState.contextSwitchEvents.push(event);
         liveState.switchesToday += 1;
 
-        // Keep only last 50 events
         if (liveState.contextSwitchEvents.length > 50) {
           liveState.contextSwitchEvents = liveState.contextSwitchEvents.slice(-50);
         }
       }
     }
   } else {
-    // Tab not in our list yet — might be a chrome:// or new tab; refresh
     await refreshAllTabs();
     return;
   }
@@ -469,15 +551,12 @@ chrome.tabs.onUpdated.addListener((_tabId, changeInfo, tab) => {
     recalculate();
     debouncedSave();
   } else if (tab.url && !tab.url.startsWith('chrome://')) {
-    // New tab we haven't seen yet
     const item = chromeTabToTabItem(tab, tab.active || false);
     liveState.openTabs.push(item);
     recalculate();
     debouncedSave();
   }
 });
-
-// ─── Window Focus Changes ───
 
 chrome.windows.onFocusChanged.addListener(async (windowId) => {
   if (windowId === chrome.windows.WINDOW_ID_NONE) return;
@@ -501,37 +580,63 @@ chrome.windows.onFocusChanged.addListener(async (windowId) => {
   }
 });
 
-// ─── Heartbeat Alarm (Time Tracking) ───
+// ─── Heartbeat Alarm (Time Tracking & Periodic Snapshots) ───
+
+let heartbeatMinutesCount = 0;
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name !== 'cs_heartbeat') return;
 
-  // Increment time for the active tab
   const activeTab = liveState.openTabs.find(t => t.isActive);
   if (activeTab) {
     activeTab.timeSpentSeconds = (activeTab.timeSpentSeconds || 0) + 60;
   }
 
-  // Track deep work minutes (if dominant category is development/productivity)
   const categories = liveState.openTabs.map(t => t.domainCategory || categorizeDomain(t.domain));
   const devCount = categories.filter(c => c === 'development' || c === 'productivity' || c === 'research').length;
   if (devCount > categories.length / 2) {
     liveState.deepWorkMinutes = (liveState.deepWorkMinutes || 0) + 1;
   }
 
+  heartbeatMinutesCount++;
+
+  // Auto-record session checkpoint every 10 minutes if tabs are active
+  if (heartbeatMinutesCount % 10 === 0 && liveState.openTabs.length > 0) {
+    saveCurrentSessionSnapshot();
+  }
+
   recalculate();
   forceSave();
 });
 
-// ─── Message API for Side Panel ───
+// ─── Side Panel & Extension Messaging ───
+
+if (chrome.sidePanel && typeof chrome.sidePanel.setPanelBehavior === 'function') {
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+}
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   if (message?.type === 'CS_GET_LIVE_STATE') {
     sendResponse({
       ...liveState,
       privacyMode: 'local_only',
-      recentSessions: [],
     });
+    return true;
+  }
+
+  if (message?.type === 'CS_SAVE_SNAPSHOT') {
+    saveCurrentSessionSnapshot(message.summary).then(session => {
+      sendResponse({ success: true, session });
+    });
+    return true;
+  }
+
+  if (message?.type === 'CS_DELETE_SESSION') {
+    if (message.sessionId) {
+      liveState.recentSessions = liveState.recentSessions.filter(s => s.id !== message.sessionId);
+      forceSave();
+      sendResponse({ success: true });
+    }
     return true;
   }
 
@@ -547,10 +652,11 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       deepWorkMinutes: 0,
       sessionStartTime: new Date().toISOString(),
       lastActivityTime: new Date().toISOString(),
-      activeProject: 'Detecting...',
-      currentTask: 'Analyzing browser activity...',
+      activeProject: 'No Active Context',
+      currentTask: 'No active tabs',
+      recentSessions: [],
     };
-    chrome.storage.local.remove([STORAGE_KEY, 'contextswitch_state_v1']).then(() => {
+    chrome.storage.local.remove([STATE_STORAGE_KEY, SESSIONS_STORAGE_KEY, 'contextswitch_state_v1']).then(() => {
       refreshAllTabs().then(() => {
         sendResponse({ success: true });
       });
@@ -558,13 +664,16 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     return true;
   }
 
-  if (message?.type === 'CS_GET_STATUS') {
-    sendResponse({ status: 'active', version: '2.0.0', ready: true });
+  if (message?.type === 'CS_UPDATE_EXCLUDED_DOMAINS') {
+    if (Array.isArray(message.excludedDomains)) {
+      excludedDomains = message.excludedDomains;
+    }
+    sendResponse({ success: true });
     return true;
   }
 
-  if (message?.type === 'CS_PING') {
-    sendResponse({ pong: true, timestamp: Date.now() });
+  if (message?.type === 'CS_GET_STATUS') {
+    sendResponse({ status: 'active', version: '2.0.0', ready: true });
     return true;
   }
 

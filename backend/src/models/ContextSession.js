@@ -4,6 +4,9 @@ const tabContextSchema = new mongoose.Schema({
   url: { type: String, required: true },
   title: { type: String, default: "" },
   favicon: { type: String, default: "" },
+  domain: { type: String, default: "" },
+  category: { type: String, default: "general" },
+  timeSpentSeconds: { type: Number, default: 0 },
   capturedAt: { type: Date, default: Date.now },
 });
 
@@ -12,7 +15,13 @@ const contextSessionSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
+      required: false,
+      default: null,
+    },
+    deviceId: {
+      type: String,
+      trim: true,
+      default: "dev_default",
     },
     projectId: {
       type: mongoose.Schema.Types.ObjectId,
@@ -22,12 +31,20 @@ const contextSessionSchema = new mongoose.Schema(
     projectName: {
       type: String,
       trim: true,
-      default: "",
+      default: "General Browsing",
     },
     task: {
       type: String,
       trim: true,
-      default: "",
+      default: "Active Workflow",
+    },
+    contextScore: {
+      type: Number,
+      default: 0,
+    },
+    durationMinutes: {
+      type: Number,
+      default: 0,
     },
     startedAt: {
       type: Date,
@@ -42,14 +59,31 @@ const contextSessionSchema = new mongoose.Schema(
       type: String,
       default: "",
     },
-    nextAction: {
+    suggestedNextStep: {
       type: String,
       default: "",
+    },
+    unfinishedWork: {
+      type: String,
+      default: "",
+    },
+    tags: {
+      type: [String],
+      default: [],
+    },
+    switchCount: {
+      type: Number,
+      default: 0,
+    },
+    timeline: {
+      type: Array,
+      default: [],
     },
   },
   { timestamps: true }
 );
 
+contextSessionSchema.index({ deviceId: 1, createdAt: -1 });
 contextSessionSchema.index({ userId: 1, createdAt: -1 });
 contextSessionSchema.index({ projectId: 1 });
 

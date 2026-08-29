@@ -5,8 +5,13 @@ const userSettingsSchema = new mongoose.Schema(
     userId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: true,
-      unique: true,
+      required: false,
+      default: null,
+    },
+    deviceId: {
+      type: String,
+      trim: true,
+      default: "dev_default",
     },
     captureEnabled: {
       type: Boolean,
@@ -31,8 +36,18 @@ const userSettingsSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    excludedDomains: {
+      type: [String],
+      default: [],
+    },
+    privacyMode: {
+      type: String,
+      default: "local_only",
+    },
   },
   { timestamps: true }
 );
+
+userSettingsSchema.index({ deviceId: 1 }, { unique: true, sparse: true });
 
 module.exports = mongoose.model("UserSettings", userSettingsSchema);
