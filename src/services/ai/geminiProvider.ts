@@ -14,7 +14,7 @@ import { AIContextResult, AIAnalysisInput, AISummaryInput } from '../../types/co
 import { apiClient } from '../apiClient';
 
 export class GeminiProvider implements AIProvider {
-  readonly name = 'Gemini 2.0 Flash (Backend Cloud)';
+  readonly name = 'Gemini 2.5 Flash Live (Backend)';
   readonly requiresApiKey = false; // API Key is securely kept on backend
 
   private fallback: LocalFallbackProvider;

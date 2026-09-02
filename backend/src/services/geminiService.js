@@ -4,7 +4,7 @@
  * Protects credentials from client-side exposure.
  */
 
-const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent';
+const GEMINI_API_URL = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-live:generateContent';
 
 const CONTEXT_ANALYSIS_PROMPT = `You are ContextSwitch AI, a real-time browser productivity assistant. Analyze the user's open browser tabs and recent context switches to infer their current working context.
 
